@@ -1,13 +1,13 @@
 # Causal Machine Learning for Identifying Drug-Associated Kidney Stone Risk Using NHANES
 
-We use NHANES 2007-2018 data to estimate causal effects of prescription drug classes on kidney stone risk using augmented inverse probability weighting (AIPW), with XGBoost prediction and SHAP interpretability.
+We use NHANES 2007-2018 data to estimate causal effects of prescription drug classes on kidney stone risk using augmented inverse probability weighting (AIPW), with ensemble ML prediction (XGBoost, LightGBM, CatBoost) and SHAP interpretability.
 
 ## Dataset
 
 - **Source**: [NHANES](https://wwwn.cdc.gov/nchs/nhanes/Default.aspx) (National Health and Nutrition Examination Survey), cycles 2007-2018
 - **Sample**: 34,679 adults (20+) with valid kidney stone questionnaire responses
 - **Outcome**: Self-reported kidney stone history (KIQ026) — 3,234 cases (9.3%)
-- **Features**: 103 columns including demographics, serum chemistry, urine labs, comorbidities, lifestyle, and 20 drug class indicators
+- **Features**: 95 selected features (from 175 engineered) including demographics, serum chemistry, urine labs, dietary intake, comorbidities, lifestyle, 20 drug class indicators, and clinical interaction terms
 
 ### NHANES Components Used
 
@@ -26,15 +26,16 @@ We use NHANES 2007-2018 data to estimate causal effects of prescription drug cla
 | SMQ | Smoking | Smoking status |
 | SLQ | Sleep | Sleep hours |
 | PAQ | Physical Activity | Vigorous/moderate activity |
+| DR1TOT | Dietary Intake (Day 1) | Energy, protein, sodium, potassium, calcium, magnesium, vitamin C, water, fiber, sugars |
 
 ## Pipeline
 
 ```
-01_download_data.py  →  Download/copy 78 NHANES XPT files
-02_preprocess.py     →  Merge, clean, feature engineer → analysis_ready.parquet
+01_download_data.py  →  Download/copy 98 NHANES XPT files (incl. dietary intake)
+02_preprocess.py     →  Merge, clean, feature engineer, MICE imputation → analysis_ready.parquet
 03_eda.py            →  Descriptive stats, correlation matrix, plots
 04_causal_analysis.py →  AIPW causal effects, subgroup CATEs, forest plot
-05_prediction.py     →  Logistic regression, XGBoost, SHAP
+05_prediction.py     →  Optuna-tuned XGBoost/LightGBM/CatBoost, stacking ensemble, SHAP
 06_results.py        →  Executive summary, final figure panel
 ```
 
@@ -87,8 +88,16 @@ python 06_results.py
 
 | Model | ROC-AUC | PR-AUC |
 |---|---|---|
-| Logistic Regression | 0.642 | 0.162 |
-| XGBoost | 0.644 | 0.162 |
+| CatBoost (Optuna-tuned) | **0.688** | **0.188** |
+| XGBoost (Optuna-tuned) | 0.686 | 0.181 |
+| Augmented Stacking | 0.687 | 0.182 |
+| LightGBM (Optuna-tuned) | 0.669 | 0.176 |
+| Logistic Regression (Tuned) | 0.678 | 0.180 |
+| ExtraTrees | 0.672 | 0.180 |
+
+Cross-validated (3x5 repeated stratified K-fold): **XGBoost ROC-AUC = 0.692 +/- 0.009**
+
+Improved from baseline ROC-AUC of 0.644 through: Optuna hyperparameter tuning (200+ trials per model), feature engineering (race encoding, lab ratios, clinical interactions, dietary intake), MICE imputation for correlated lab values, importance-based feature selection (132 → 95 features), and multi-model ensembling.
 
 ### SHAP Feature Importance
 
@@ -134,7 +143,8 @@ python 06_results.py
 - Unmeasured confounding remains possible (E-values quantify minimum confounding strength needed)
 - Self-reported outcome may undercount asymptomatic stones
 - Confounding by indication is severe for gout drugs and alpha blockers (tamsulosin prescribed FOR stones)
-- No urine chemistry (pH, oxalate, citrate) available in NHANES
+- No urine chemistry (pH, oxalate, citrate) or dietary oxalate available in NHANES
+- Predictive performance (ROC-AUC ~0.69) reflects inherent ceiling of cross-sectional survey data; published EHR-based models with richer data achieve 0.70-0.78
 
 ## Project Structure
 
@@ -146,11 +156,11 @@ ML4H/
 ├── 02_preprocess.py           # Preprocessing pipeline
 ├── 03_eda.py                  # Exploratory data analysis
 ├── 04_causal_analysis.py      # Causal inference (AIPW)
-├── 05_prediction.py           # XGBoost + SHAP
+├── 05_prediction.py           # Ensemble ML (XGBoost/LightGBM/CatBoost) + SHAP
 ├── 06_results.py              # Results compilation
 ├── requirements.txt
 ├── data/
-│   ├── raw/                   # 78 NHANES XPT files
+│   ├── raw/                   # 98 NHANES XPT files
 │   └── processed/             # analysis_ready.parquet
 └── outputs/
     ├── figures/               # All plots

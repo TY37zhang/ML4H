@@ -22,7 +22,7 @@ CYCLES = {
 BASE_URL = "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/{year}/DataFiles/{filename}.xpt"
 
 CACHED_DATASETS = ["KIQ_U", "RXQ_RX", "BIOPRO", "DEMO", "ALB_CR"]
-DOWNLOAD_DATASETS = ["MCQ", "DIQ", "BPQ", "SMQ", "BMX", "BPX", "SLQ", "PAQ"]
+DOWNLOAD_DATASETS = ["MCQ", "DIQ", "BPQ", "SMQ", "BMX", "BPX", "SLQ", "PAQ", "DR1TOT"]
 
 OUTCOME_VAR = "KIQ026"
 OUTCOME_YES = 1.0
@@ -83,6 +83,19 @@ LIFESTYLE_VARS = {
     "SLD012": "sleep_hours",
     "PAQ605": "vigorous_activity",
     "PAQ650": "moderate_activity",
+}
+
+DIETARY_VARS = {
+    "DR1TKCAL": "energy_kcal",
+    "DR1TPROT": "protein_g",
+    "DR1TSODI": "sodium_mg",
+    "DR1TPOTA": "potassium_mg",
+    "DR1TCALC": "calcium_mg",
+    "DR1TMAGN": "magnesium_mg",
+    "DR1TVC": "vitamin_c_mg",
+    "DR1TMOIS": "moisture_g",
+    "DR1TSUGR": "total_sugars_g",
+    "DR1TFIBE": "fiber_g",
 }
 
 DRUG_MIN_USERS = 100

@@ -93,12 +93,15 @@ We use the National Health and Nutrition Examination Survey (NHANES), pooling si
 
 The final analytic sample comprises **34,679 adults aged 20+** with valid kidney stone responses: **3,234 (9.3%) with kidney stone history** and **31,445 without**. Drug exposure is classified into 20 pharmacological classes using substring matching on generic drug names, with classes ranging from 522 users (bisphosphonates) to 6,695 users (statins).
 
-Derived features include eGFR (CKD-EPI 2021 equation), albumin-creatinine ratio, composite smoking status, and a polypharmacy indicator (5+ concurrent prescriptions). Missing values are handled via median imputation with binary missingness indicators retained as features.
+Derived features include eGFR (CKD-EPI 2021 equation), albumin-creatinine ratio, composite smoking status, polypharmacy indicator (5+ concurrent prescriptions), race one-hot encoding, lab ratios (calcium/phosphorus, BUN/creatinine, sodium/potassium, BUN/eGFR), clinical interaction terms, dietary-derived features (sodium/potassium ratio, low water intake flag), and composite scores (metabolic syndrome, high-risk drug count). Missing lab values are imputed via IterativeImputer (MICE); other missing values use median imputation. Binary missingness indicators are retained as features where informative.
 
 ### Experiments setup
 
 - **Causal analysis**: 12 drug classes analyzed (minimum 100 users). Confounders include 24 variables: demographics (age, sex, race, income), body measures (BMI, waist), serum labs (9 analytes), derived measures (eGFR, ACR), comorbidities (diabetes, hypertension, high cholesterol, CHF, CHD), lifestyle (smoking, physical activity), and other drug class indicators. AIPW uses L2-penalized logistic regression for propensity scores and gradient-boosted regressors for outcome models. Propensity score overlap is verified visually for each drug class.
-- **Prediction**: 80/20 stratified train/test split. Logistic regression (L1, C=0.1) and XGBoost (500 trees, max depth 6, class-weighted, early stopping on PR-AUC). Evaluation via ROC-AUC, PR-AUC, F1 at optimal threshold, and calibration plots. SHAP TreeExplainer applied to XGBoost for feature attribution.
+- **Prediction**: 80/20 stratified train/test split. Five models trained: Logistic Regression (L1, GridSearchCV-tuned C), XGBoost (Optuna-tuned, 200 trials, 5-fold CV), LightGBM (Optuna-tuned, 150 trials), CatBoost (Optuna-tuned, 100 trials), and ExtraTrees. Feature selection via XGBoost importance threshold reduces 132 engineered features to 95. Stacking ensemble combines all models via out-of-fold predictions with logistic regression meta-learner. Evaluation via ROC-AUC, PR-AUC, F1, calibration, and repeated 3x5 stratified CV. SHAP TreeExplainer applied to XGBoost for feature attribution.
+- **Feature engineering**: Race one-hot encoding, lab ratios (calcium/phosphorus, BUN/creatinine, sodium/potassium, BUN/eGFR), polynomial terms (age^2, BMI^2), clinical interactions (drug_count x age, uric_acid x BMI, etc.), dietary-derived features (sodium/potassium ratio, low water intake flag), composite scores (metabolic syndrome, high-risk drug count).
+- **Imputation**: IterativeImputer (MICE) for correlated lab values; median imputation for other variables.
+- **Dietary data**: NHANES DR1TOT (24-hour dietary recall) added for all cycles, providing water/moisture intake, dietary calcium, sodium, potassium, protein, vitamin C, magnesium, energy, fiber, and sugars.
 - **E-values**: For each significant ATE, we compute the E-value — the minimum strength of unmeasured confounding needed to explain away the observed result — to quantify robustness.
 
 ---
@@ -147,10 +150,17 @@ Eight drug classes show significant positive effects (increased stone risk) and 
 
 | Model | ROC-AUC | PR-AUC |
 |---|---|---|
-| Logistic Regression (L1) | 0.642 | 0.162 |
-| XGBoost | 0.644 | 0.162 |
+| CatBoost (Optuna-tuned) | **0.688** | **0.188** |
+| XGBoost (Optuna-tuned) | 0.686 | 0.181 |
+| Augmented Stacking Ensemble | 0.687 | 0.182 |
+| LightGBM (Optuna-tuned) | 0.669 | 0.176 |
+| Logistic Regression (Tuned C) | 0.678 | 0.180 |
+| ExtraTrees | 0.672 | 0.180 |
+| *Baseline (v1 XGBoost)* | *0.644* | *0.162* |
 
-Both models achieve moderate discriminative performance. The top SHAP features include drug count, waist circumference, urine creatinine, urine albumin, and ACR — dominated by metabolic and body composition markers rather than individual drug classes. Among drug-specific SHAP features, PPIs, opioids, and beta blockers rank highest, broadly consistent with the causal ATE estimates.
+ROC-AUC improved from 0.644 to **0.688** (+6.8%) through systematic optimization: Optuna hyperparameter tuning with 5-fold CV (200 XGBoost trials, 150 LightGBM, 100 CatBoost), feature engineering (+29 features including dietary intake, race encoding, lab ratios, clinical interactions), MICE imputation for correlated lab values, and importance-based feature selection (132 → 95 features). Repeated 3x5 stratified CV for XGBoost yields **0.692 +/- 0.009**, confirming stable generalization.
+
+The top SHAP features include drug count, waist circumference, urine creatinine, urine albumin, and ACR — dominated by metabolic and body composition markers rather than individual drug classes. Dietary features (sodium, water intake) contribute modest additional signal. Among drug-specific SHAP features, PPIs, opioids, and beta blockers rank highest, broadly consistent with the causal ATE estimates.
 
 ---
 
@@ -162,17 +172,24 @@ Both models achieve moderate discriminative performance. The top SHAP features i
 
 2. **Confounding by indication**: Gout drugs (allopurinol, colchicine) show the largest ATE (+8.8%), but gout patients inherently have hyperuricemia — a direct cause of uric acid stones. The E-value of 3.30 suggests moderate-strength unmeasured confounding could explain this result. Similarly, the positive thiazide signal (+2.4%) contradicts clinical evidence that thiazides are protective (they reduce urinary calcium excretion); this likely reflects residual confounding by hypertension severity.
 
-3. **Moderate predictive performance**: Both models achieve ROC-AUC around 0.64, consistent with prior literature on ML-based stone prediction (Paranjpe et al., 2023: 0.58-0.62; Salehi et al., 2024: 0.60). This reflects the inherent difficulty of predicting a multifactorial condition from cross-sectional survey data without longitudinal urine chemistry or dietary details.
+3. **Predictive performance ceiling**: After extensive optimization (Optuna tuning, ensemble methods, dietary features, MICE imputation, feature selection), the best model achieves ROC-AUC 0.688 (CV: 0.692). This exceeds prior literature on ML-based stone prediction (Paranjpe et al., 2023: 0.58-0.62; Salehi et al., 2024: 0.60) but falls short of the 0.70 threshold typical of clinically useful screening tools. The remaining gap reflects the inherent ceiling of cross-sectional survey data with self-reported outcomes — EHR-based models with richer longitudinal data achieve 0.70-0.78.
 
-4. **Missing urine chemistry**: NHANES lacks urine pH, calcium, oxalate, and citrate measurements — the direct mechanistic mediators of stone formation. This limits both the predictive models and the causal analysis, as these would serve as important confounders or mediators.
+4. **Missing urine chemistry**: NHANES lacks urine pH, calcium, oxalate, and citrate measurements — the direct mechanistic mediators of stone formation. Dietary oxalate is also absent from the NHANES nutrient database. While we incorporated 24-hour dietary recall data (DR1TOT: water, calcium, sodium, potassium, protein, vitamin C, magnesium), these provide only indirect proxies for the urinary chemistry that drives stone formation.
+
+### Completed improvements (v2)
+
+1. **Prediction pipeline overhaul**: Optuna-tuned XGBoost (200 trials), LightGBM (150 trials), CatBoost (100 trials), with stacking ensemble and multi-seed averaging. ROC-AUC improved from 0.644 to 0.688.
+2. **Feature engineering**: Added race one-hot encoding, 4 lab ratios, 11 clinical interaction terms, polynomial features, composite scores (metabolic syndrome, high-risk drug count), and 15 dietary-derived features.
+3. **Dietary intake data**: Integrated NHANES DR1TOT (24-hour dietary recall) providing 10 nutrient variables across all cycles.
+4. **Imputation**: Switched from median to IterativeImputer (MICE) for correlated lab values.
+5. **Feature selection**: XGBoost importance-based pruning (132 → 95 features) to reduce noise.
 
 ### Remaining tasks
 
 1. **Causal forests**: Implement econml's `CausalForestDML` for full heterogeneous treatment effect estimation beyond the current stratified IPW approach, enabling data-driven subgroup discovery.
 2. **Sensitivity analyses**: Restrict to cycles H-J (2013-2018) where drug indication codes are available, enabling partial control for confounding by indication. Run negative control analyses using drug classes with no plausible stone mechanism (thyroid hormone).
 3. **Temporal sensitivity**: Compare results when restricting to participants aged 40+ (more likely to have established drug use before stone formation) versus all adults.
-4. **Improved feature engineering**: Explore drug interaction features (e.g., concurrent thiazide + calcium supplement use) and nonlinear transformations of lab values.
-5. **Survey weight integration**: Incorporate NHANES survey weights into causal estimates for nationally representative inference.
+4. **Survey weight integration**: Incorporate NHANES survey weights into causal estimates for nationally representative inference.
 
 ### Questions for instructor/TAs
 

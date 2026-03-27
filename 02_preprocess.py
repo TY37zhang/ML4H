@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 from sklearn.impute import SimpleImputer
+from sklearn.experimental import enable_iterative_imputer  # noqa
+from sklearn.impute import IterativeImputer
 from config import *
 from drug_classes import create_drug_class_matrix
 
@@ -96,6 +98,10 @@ def main():
     paq = load_dataset("PAQ", paq_cols)
     print(f"  PAQ: {len(paq)} rows")
 
+    diet_cols = ["SEQN"] + list(DIETARY_VARS.keys())
+    diet = load_dataset("DR1TOT", diet_cols)
+    print(f"  DR1TOT: {len(diet)} rows")
+
     rx_cols = ["SEQN", "RXDUSE", "RXDDRUG", "RXDDRGID", "RXDDAYS", "RXDCOUNT"]
     rx = load_dataset("RXQ_RX", rx_cols)
     print(f"  RXQ_RX: {len(rx)} rows")
@@ -119,9 +125,10 @@ def main():
         sm = smq[smq["cycle"] == suffix].drop(columns=["cycle"])
         sl = slq[slq["cycle"] == suffix].drop(columns=["cycle"])
         pa = paq[paq["cycle"] == suffix].drop(columns=["cycle"])
+        dt = diet[diet["cycle"] == suffix].drop(columns=["cycle"])
 
         merged = k.merge(d, on="SEQN", how="left")
-        for right_df in [b, u, bo, bpx, m, di, bq, sm, sl, pa]:
+        for right_df in [b, u, bo, bpx, m, di, bq, sm, sl, pa, dt]:
             merged = merged.merge(right_df, on="SEQN", how="left")
 
         merged["cycle"] = suffix
@@ -151,6 +158,23 @@ def main():
         (df["URXUCR"].notna()) & (df["URXUCR"] > 0),
         df["URXUMA"] / df["URXUCR"] * 100,
         np.nan
+    )
+
+    df["ca_phos_ratio"] = np.where(
+        (df["LBXSPH"].notna()) & (df["LBXSPH"] > 0),
+        df["LBXSCA"] / df["LBXSPH"], np.nan
+    )
+    df["bun_cr_ratio"] = np.where(
+        (df["LBXSCR"].notna()) & (df["LBXSCR"] > 0),
+        df["LBXSBU"] / df["LBXSCR"], np.nan
+    )
+    df["na_k_ratio"] = np.where(
+        (df["LBXSKSI"].notna()) & (df["LBXSKSI"] > 0),
+        df["LBXSNASI"] / df["LBXSKSI"], np.nan
+    )
+    df["bun_egfr_ratio"] = np.where(
+        (df["egfr"].notna()) & (df["egfr"] > 0),
+        df["LBXSBU"] / df["egfr"], np.nan
     )
 
     df["smoking_status"] = np.where(
@@ -191,12 +215,71 @@ def main():
 
     df["sex_binary"] = (df["RIAGENDR"] == 1).astype(int)
 
+    for val, name in [(1.0, "mexican_american"), (2.0, "other_hispanic"),
+                      (3.0, "nh_white"), (4.0, "nh_black"), (5.0, "other_race")]:
+        df[f"race_{name}"] = (df["RIDRETH1"] == val).astype(int)
+
+    df["age_squared"] = df["RIDAGEYR"] ** 2
+    df["bmi_squared"] = df["BMXBMI"] ** 2
+    df["age_x_sex"] = df["RIDAGEYR"] * df["sex_binary"]
+    df["age_x_bmi"] = df["RIDAGEYR"] * df["BMXBMI"]
+    df["log_drug_count"] = np.log1p(df["drug_count"])
+
+    df["age_group_young"] = ((df["RIDAGEYR"] >= 20) & (df["RIDAGEYR"] < 40)).astype(int)
+    df["age_group_middle"] = ((df["RIDAGEYR"] >= 40) & (df["RIDAGEYR"] < 60)).astype(int)
+    df["age_group_senior"] = (df["RIDAGEYR"] >= 60).astype(int)
+
+    df["drug_count_x_age"] = df["drug_count"] * df["RIDAGEYR"]
+    df["drug_count_x_bmi"] = df["drug_count"] * df["BMXBMI"]
+    df["drug_count_x_egfr"] = df["drug_count"] * df["egfr"]
+    df["uric_acid_x_bmi"] = df["LBXSUA"] * df["BMXBMI"]
+    df["calcium_x_age"] = df["LBXSCA"] * df["RIDAGEYR"]
+    df["egfr_x_age"] = df["egfr"] * df["RIDAGEYR"]
+    df["waist_x_sex"] = df["BMXWAIST"] * df["sex_binary"]
+    df["bp_product"] = df["systolic_bp"] * df["diastolic_bp"]
+    df["pulse_pressure"] = df["systolic_bp"] - df["diastolic_bp"]
+    df["anion_gap"] = df["LBXSNASI"] - df["LBXSCLSI"] - df["LBXSC3SI"]
+    df["ca_cr_product"] = df["LBXSCA"] * df["LBXSCR"]
+
+    high_risk_drugs = ["drug_gout_drug", "drug_beta_blocker", "drug_opioid",
+                       "drug_thiazide", "drug_ppi"]
+    df["high_risk_drug_count"] = sum(
+        df[d].fillna(0) for d in high_risk_drugs if d in df.columns
+    )
+    df["any_diuretic"] = ((df.get("drug_loop_diuretic", 0) == 1) |
+                          (df.get("drug_thiazide", 0) == 1) |
+                          (df.get("drug_potassium_sparing", 0) == 1)).astype(int)
+    df["metabolic_syndrome_score"] = (
+        (df["BMXBMI"] >= 30).astype(int) +
+        df["diabetes_status"].fillna(0).clip(0, 1).astype(int) +
+        df.get("BPQ020", pd.Series(0, index=df.index)).fillna(0).astype(int) +
+        (df["LBXSGL"] >= 100).astype(int)
+    )
+
+    df["sodium_potassium_ratio"] = np.where(
+        (df["DR1TPOTA"].notna()) & (df["DR1TPOTA"] > 0),
+        df["DR1TSODI"] / df["DR1TPOTA"], np.nan
+    )
+    df["calcium_per_kg"] = np.where(
+        (df["BMXBMI"].notna()) & (df["BMXBMI"] > 0),
+        df["DR1TCALC"] / df["BMXBMI"], np.nan
+    )
+    df["low_water_intake"] = (df["DR1TMOIS"] < 1500).astype(int)
+    df["high_sodium_intake"] = (df["DR1TSODI"] > 2300).astype(int)
+    df["high_protein_intake"] = (df["DR1TPROT"] > 100).astype(int)
+
     print("\n=== Handling missing data ===")
     feature_cols = (
         list(LAB_VARS.keys()) + list(URINE_VARS.keys()) + list(BODY_VARS.keys()) +
         ["systolic_bp", "diastolic_bp", "egfr", "acr", "SLD012",
          "smoking_status", "diabetes_status", "physically_active", "obesity_category",
-         "RIDAGEYR", "INDFMPIR", "DMDEDUC2"] +
+         "RIDAGEYR", "INDFMPIR", "DMDEDUC2",
+         "ca_phos_ratio", "bun_cr_ratio", "na_k_ratio", "bun_egfr_ratio",
+         "drug_count_x_age", "drug_count_x_bmi", "drug_count_x_egfr",
+         "uric_acid_x_bmi", "calcium_x_age", "egfr_x_age",
+         "waist_x_sex", "bp_product", "pulse_pressure", "anion_gap", "ca_cr_product",
+         "sodium_potassium_ratio", "calcium_per_kg"] +
+        list(DIETARY_VARS.keys()) +
         list(COMORBIDITY_VARS.keys())
     )
     feature_cols = [c for c in feature_cols if c in df.columns]
@@ -218,8 +301,19 @@ def main():
         print(f"  Excluding (>50% missing): {exclude_cols}")
 
     numeric_cols = [c for c in feature_cols if c not in exclude_cols and df[c].dtype in [np.float64, np.int64, float]]
-    imputer = SimpleImputer(strategy="median")
-    df[numeric_cols] = imputer.fit_transform(df[numeric_cols])
+
+    lab_cols_to_mice = [c for c in numeric_cols if c.startswith("LBX") or
+                        c in ["egfr", "acr", "ca_phos_ratio", "bun_cr_ratio",
+                              "na_k_ratio", "bun_egfr_ratio"]]
+    other_cols_to_impute = [c for c in numeric_cols if c not in lab_cols_to_mice]
+
+    if lab_cols_to_mice:
+        print(f"  MICE imputation on {len(lab_cols_to_mice)} lab columns...")
+        mice_imputer = IterativeImputer(max_iter=10, random_state=42, sample_posterior=False)
+        df[lab_cols_to_mice] = mice_imputer.fit_transform(df[lab_cols_to_mice])
+    if other_cols_to_impute:
+        simple_imputer = SimpleImputer(strategy="median")
+        df[other_cols_to_impute] = simple_imputer.fit_transform(df[other_cols_to_impute])
 
     print(f"\n=== Final dataset ===")
     print(f"  Rows: {len(df)}")
