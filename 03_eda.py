@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 from config import *
+from drug_classes import DRUG_CLASS_MAP
 
 plt.style.use("seaborn-v0_8-whitegrid")
 plt.rcParams.update({"font.size": 11, "figure.dpi": 150})
@@ -78,7 +79,7 @@ def table1(df):
 
 
 def drug_prevalence_table(df):
-    drug_cols = [c for c in df.columns if c.startswith("drug_") and c != "drug_count"]
+    drug_cols = [f"drug_{cls}" for cls in DRUG_CLASS_MAP if f"drug_{cls}" in df.columns]
     rows = []
     for col in drug_cols:
         cls_name = col.replace("drug_", "")

@@ -7,7 +7,7 @@ We use NHANES 2007-2018 data to estimate drug-class effects on kidney stone hist
 - **Source**: [NHANES](https://wwwn.cdc.gov/nchs/nhanes/Default.aspx) (National Health and Nutrition Examination Survey), cycles 2007-2018
 - **Sample**: 34,679 adults (20+) with valid kidney stone questionnaire responses
 - **Outcome**: Self-reported lifetime kidney stone history as of the NHANES interview (KIQ026) — 3,234 cases (9.3%)
-- **Features**: 95 selected features (from 175 engineered) including demographics, serum chemistry, urine labs, dietary intake, comorbidities, lifestyle, 20 drug class indicators, and clinical interaction terms
+- **Features**: 226 processed columns after feature engineering, missingness indicators, 20 current drug class indicators, and drug-duration sensitivity indicators; the causal model uses demographics, labs, comorbidities, lifestyle, and other drug class indicators as confounders
 
 ## Target-Trial-Style Estimand
 
@@ -35,15 +35,15 @@ We use NHANES 2007-2018 data to estimate drug-class effects on kidney stone hist
 | SMQ | Smoking | Smoking status |
 | SLQ | Sleep | Sleep hours |
 | PAQ | Physical Activity | Vigorous/moderate activity |
-| DR1TOT | Dietary Intake (Day 1) | Energy, protein, sodium, potassium, calcium, magnesium, vitamin C, water, fiber, sugars |
+| DR1TOT | Dietary Intake (Day 1) | Optional dietary intake component; preprocessing tolerates missing DR1TOT files |
 
 ## Pipeline
 
 ```
-01_download_data.py  →  Download/copy 98 NHANES XPT files (incl. dietary intake)
+01_download_data.py  →  Download/copy NHANES XPT files; current checkout has 78 raw XPT files
 02_preprocess.py     →  Merge, clean, feature engineer, MICE imputation → analysis_ready.parquet
 03_eda.py            →  Descriptive stats, correlation matrix, plots
-04_causal_analysis.py →  AIPW causal effects, subgroup CATEs, forest plot
+04_causal_analysis.py →  AIPW effects, E-values, balance diagnostics, duration sensitivity
 05_prediction.py     →  Optional supplementary prediction benchmark
 06_results.py        →  Causal executive summary, diagnostics, final figure panel
 ```
@@ -62,7 +62,7 @@ python 01_download_data.py
 python 02_preprocess.py
 python 03_eda.py
 python 04_causal_analysis.py
-python 05_prediction.py
+python 05_prediction.py  # optional supplementary prediction benchmark
 python 06_results.py
 ```
 
@@ -87,6 +87,20 @@ python 06_results.py
 | Loop diuretics | 1,303 | -1.7% | [-2.6%, -0.8%] | Yes | 1.73 |
 | Statins | 6,695 | -1.8% | [-2.9%, -0.7%] | Yes | 1.78 |
 
+### Causal Diagnostics
+
+![Main Panel](outputs/figures/main_figure_panel.png)
+
+Key diagnostic tables:
+
+- `outputs/tables/ate_summary.csv` — AIPW ATEs, confidence intervals, FDR correction, E-values, and max SMDs
+- `outputs/tables/covariate_balance.csv` — before/after IPW standardized mean differences
+- `outputs/tables/causal_diagnostics_summary.csv` — compact ATE/E-value/balance summary
+- `outputs/tables/ate_duration_sensitivity.csv` — `RXDDAYS >= 365` and `RXDDAYS >= 730` sensitivity results
+- `outputs/tables/causal_feature_importance.csv` — nuisance-model feature importance for causal interpretation
+
+Balance improved after IPW for many classes, but several maximum post-IPW SMDs remain high, especially loop diuretics, potassium-sparing diuretics, gout drugs, thiazides, and metformin. These estimates should therefore be interpreted as adjusted causal estimates under assumptions, not definitive causal proof.
+
 ### Crude Drug Class Stone Rates
 
 ![Drug Class Stone Rates](outputs/figures/drug_class_stone_rates.png)
@@ -95,7 +109,20 @@ python 06_results.py
 
 Prediction is not the primary experiment; it is retained only as a secondary benchmark because the causal nuisance models already perform prediction inside AIPW.
 
+| Model | ROC-AUC | PR-AUC | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|
+| XGBoost | 0.644 | 0.162 | 0.176 | 0.323 | 0.228 |
+| Logistic Regression | 0.642 | 0.162 | — | — | — |
+
 The optional `05_prediction.py` script can still generate ROC/PR and SHAP artifacts, but these are not part of the primary causal estimand. Main interpretability now comes from `outputs/tables/causal_feature_importance.csv`, which summarizes the nuisance models used inside AIPW.
+
+Supplementary prediction plots:
+
+![ROC Curve](outputs/figures/roc_curve.png)
+
+![PR Curve](outputs/figures/pr_curve.png)
+
+![Calibration](outputs/figures/calibration_plot.png)
 
 ### Feature Distributions by Stone Status
 
@@ -108,18 +135,6 @@ The optional `05_prediction.py` script can still generate ROC/PR and SHAP artifa
 ### Polypharmacy and Stone Risk
 
 ![Polypharmacy](outputs/figures/stone_rate_by_drug_count.png)
-
-### Precision-Recall Curve
-
-![PR Curve](outputs/figures/pr_curve.png)
-
-### Calibration Plot
-
-![Calibration](outputs/figures/calibration_plot.png)
-
-### Main Figure Panel
-
-![Main Panel](outputs/figures/main_figure_panel.png)
 
 ## Key Findings
 
@@ -153,7 +168,7 @@ ML4H/
 ├── 06_results.py              # Causal results compilation
 ├── requirements.txt
 ├── data/
-│   ├── raw/                   # 98 NHANES XPT files
+│   ├── raw/                   # 78 tracked NHANES XPT files; DR1TOT is optional
 │   └── processed/             # analysis_ready.parquet
 └── outputs/
     ├── figures/               # All plots

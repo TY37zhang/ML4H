@@ -1,14 +1,14 @@
 Variable,Stones (n=3234),No Stones (n=31445),p-value
 Age (years),56.1 ± 16.3,49.3 ± 17.9,<0.0001
 BMI (kg/m²),30.4 ± 6.9,29.0 ± 6.8,<0.0001
-Serum Calcium (mg/dL),9.4 ± 0.4,9.4 ± 0.3,0.0130
+Serum Calcium (mg/dL),9.4 ± 0.4,9.4 ± 0.3,0.0135
 Serum Uric Acid (mg/dL),5.6 ± 1.5,5.4 ± 1.4,<0.0001
 Serum Phosphorus (mg/dL),3.7 ± 0.6,3.7 ± 0.5,<0.0001
-Serum Bicarbonate (mmol/L),25.1 ± 2.3,25.1 ± 2.2,0.4631
+Serum Bicarbonate (mmol/L),25.1 ± 2.3,25.2 ± 2.2,0.4183
 Serum Creatinine (mg/dL),1.0 ± 0.7,0.9 ± 0.4,<0.0001
-BUN (mg/dL),15.2 ± 7.1,13.6 ± 5.6,<0.0001
-eGFR (mL/min/1.73m²),88.8 ± 22.8,95.3 ± 21.6,<0.0001
-Albumin-Creatinine Ratio (mg/g),64.9 ± 393.8,46.6 ± 623.5,0.1009
+BUN (mg/dL),15.2 ± 7.1,13.7 ± 5.7,<0.0001
+eGFR (mL/min/1.73m²),88.6 ± 22.7,95.0 ± 21.6,<0.0001
+Albumin-Creatinine Ratio (mg/g),119.1 ± 1326.3,54.1 ± 651.3,<0.0001
 Number of Prescriptions,3.5 ± 3.6,2.1 ± 2.8,<0.0001
 Poverty-Income Ratio,2.4 ± 1.5,2.4 ± 1.5,0.7851
 Male (%),55.1%,47.8%,<0.0001
