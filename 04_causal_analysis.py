@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import norm
 from config import *
 
@@ -30,19 +31,30 @@ DRUG_CLASSES_TO_ANALYZE = [
     "beta_blocker", "metformin",
 ]
 
+DURATION_EXPOSURE_DEFINITIONS = [
+    ("long_term_use_365d", "long_term"),
+    ("two_year_use_730d", "two_year"),
+]
+
 
 def get_confounders_for_class(df, target_class):
+    duration_suffixes = ("_days_max", "_long_term", "_two_year")
     other_drugs = [c for c in df.columns if c.startswith("drug_")
-                   and c != "drug_count" and c != f"drug_{target_class}"]
+                   and c != "drug_count"
+                   and not c.endswith(duration_suffixes)
+                   and not c.startswith(f"drug_{target_class}")]
     return [c for c in CONFOUNDER_COLS + other_drugs if c in df.columns]
 
 
-def compute_propensity_scores(df, treatment_col, confounder_cols):
+def compute_propensity_scores(df, treatment_col, confounder_cols, return_model=False):
     X = df[confounder_cols].fillna(0).values
+    X = StandardScaler().fit_transform(X)
     T = df[treatment_col].values
-    model = LogisticRegression(penalty="l2", C=1.0, solver="lbfgs", max_iter=1000, random_state=RANDOM_STATE)
+    model = LogisticRegression(penalty="l2", C=1.0, solver="lbfgs", max_iter=5000, random_state=RANDOM_STATE)
     model.fit(X, T)
     ps = model.predict_proba(X)[:, 1]
+    if return_model:
+        return ps, model
     return ps
 
 
@@ -55,6 +67,53 @@ def compute_smd(treated, control, var):
     if pooled_std == 0:
         return 0
     return abs(t_vals.mean() - c_vals.mean()) / pooled_std
+
+
+def weighted_mean(values, weights):
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    mask = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    if mask.sum() == 0:
+        return np.nan
+    return np.average(values[mask], weights=weights[mask])
+
+
+def weighted_var(values, weights):
+    mean = weighted_mean(values, weights)
+    if np.isnan(mean):
+        return np.nan
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    mask = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    if mask.sum() == 0:
+        return np.nan
+    return np.average((values[mask] - mean) ** 2, weights=weights[mask])
+
+
+def compute_weighted_smd(df, treatment_col, var, ps):
+    T = df[treatment_col].values
+    values = df[var].values
+    ps_clipped = np.clip(ps, 0.01, 0.99)
+    weights = np.where(T == 1, 1 / ps_clipped, 1 / (1 - ps_clipped))
+
+    treated = T == 1
+    control = T == 0
+    if treated.sum() == 0 or control.sum() == 0:
+        return np.nan
+
+    mean_t = weighted_mean(values[treated], weights[treated])
+    mean_c = weighted_mean(values[control], weights[control])
+    var_t = weighted_var(values[treated], weights[treated])
+    var_c = weighted_var(values[control], weights[control])
+    pooled_std = np.sqrt((var_t + var_c) / 2)
+    if not np.isfinite(pooled_std) or pooled_std == 0:
+        return 0
+    return abs(mean_t - mean_c) / pooled_std
+
+
+def finite_max(values):
+    finite = [v for v in values if np.isfinite(v)]
+    return max(finite) if finite else np.nan
 
 
 def ipw_ate(df, treatment_col, outcome_col, ps):
@@ -72,24 +131,29 @@ def ipw_ate(df, treatment_col, outcome_col, ps):
     return ate, se
 
 
-def aipw_ate(df, treatment_col, outcome_col, confounder_cols, ps):
+def aipw_ate(df, treatment_col, outcome_col, confounder_cols, ps, return_importance=False):
     T = df[treatment_col].values
     Y = df[outcome_col].values
-    X = df[confounder_cols].values
+    X = df[confounder_cols].fillna(0).values
     ps_clipped = np.clip(ps, 0.01, 0.99)
 
     treated_idx = T == 1
     control_idx = T == 0
 
-    outcome_model = GradientBoostingRegressor(
+    treated_model = GradientBoostingRegressor(
+        n_estimators=200, max_depth=4, min_samples_leaf=20, random_state=RANDOM_STATE
+    )
+    control_model = GradientBoostingRegressor(
         n_estimators=200, max_depth=4, min_samples_leaf=20, random_state=RANDOM_STATE
     )
     if treated_idx.sum() > 10 and control_idx.sum() > 10:
-        outcome_model.fit(X[treated_idx], Y[treated_idx])
-        mu1_hat = outcome_model.predict(X)
-        outcome_model.fit(X[control_idx], Y[control_idx])
-        mu0_hat = outcome_model.predict(X)
+        treated_model.fit(X[treated_idx], Y[treated_idx])
+        mu1_hat = treated_model.predict(X)
+        control_model.fit(X[control_idx], Y[control_idx])
+        mu0_hat = control_model.predict(X)
     else:
+        if return_importance:
+            return np.nan, np.nan, None
         return np.nan, np.nan
 
     aipw1 = mu1_hat + T / ps_clipped * (Y - mu1_hat)
@@ -97,6 +161,9 @@ def aipw_ate(df, treatment_col, outcome_col, confounder_cols, ps):
 
     ate = np.mean(aipw1 - aipw0)
     se = np.std(aipw1 - aipw0) / np.sqrt(len(Y))
+    if return_importance:
+        importance = (treated_model.feature_importances_ + control_model.feature_importances_) / 2
+        return ate, se, importance
     return ate, se
 
 
@@ -104,6 +171,30 @@ def compute_evalue(rr):
     if rr <= 1:
         rr = 1 / rr
     return rr + np.sqrt(rr * (rr - 1))
+
+
+def build_feature_importance_rows(class_name, exposure_definition, confounder_cols, propensity_model, outcome_importance):
+    if outcome_importance is None:
+        outcome_importance = np.zeros(len(confounder_cols))
+    prop_importance = np.abs(propensity_model.coef_[0]) if propensity_model is not None else np.zeros(len(confounder_cols))
+
+    outcome_importance = np.nan_to_num(outcome_importance)
+    prop_importance = np.nan_to_num(prop_importance)
+    outcome_norm = outcome_importance / outcome_importance.max() if outcome_importance.max() > 0 else outcome_importance
+    prop_norm = prop_importance / prop_importance.max() if prop_importance.max() > 0 else prop_importance
+    combined = outcome_norm + prop_norm
+
+    rows = []
+    for idx in np.argsort(combined)[-20:][::-1]:
+        rows.append({
+            "drug_class": class_name,
+            "exposure_definition": exposure_definition,
+            "feature": confounder_cols[idx],
+            "outcome_model_importance": outcome_importance[idx],
+            "propensity_model_abs_coef": prop_importance[idx],
+            "combined_rank_score": combined[idx],
+        })
+    return rows
 
 
 def plot_propensity_overlap(ps, treatment, class_name):
@@ -119,31 +210,54 @@ def plot_propensity_overlap(ps, treatment, class_name):
     plt.close()
 
 
-def analyze_drug_class(df, class_name):
-    treatment_col = f"drug_{class_name}"
+def analyze_drug_class(df, class_name, treatment_col=None, exposure_definition="current_use", plot_overlap=True, include_subgroups=True, estimator="aipw"):
+    treatment_col = treatment_col or f"drug_{class_name}"
     if treatment_col not in df.columns:
         return None
 
     n_treated = df[treatment_col].sum()
     n_control = len(df) - n_treated
     if n_treated < DRUG_MIN_USERS:
-        print(f"  Skipping {class_name}: only {n_treated} users")
+        print(f"  Skipping {class_name} ({exposure_definition}): only {n_treated} users")
         return None
 
     confounder_cols = get_confounders_for_class(df, class_name)
 
-    print(f"  {class_name}: {n_treated} treated, {n_control} control")
+    print(f"  {class_name} ({exposure_definition}): {n_treated} treated, {n_control} control")
 
-    ps = compute_propensity_scores(df, treatment_col, confounder_cols)
-    plot_propensity_overlap(ps, df[treatment_col].values, class_name)
+    ps, propensity_model = compute_propensity_scores(df, treatment_col, confounder_cols, return_model=True)
+    if plot_overlap:
+        plot_propensity_overlap(ps, df[treatment_col].values, class_name)
 
     treated = df[df[treatment_col] == 1]
     control = df[df[treatment_col] == 0]
-    smd_before = {v: compute_smd(treated, control, v) for v in CONFOUNDER_COLS if v in df.columns}
-    max_smd = max(smd_before.values()) if smd_before else 0
+    balance_vars = [v for v in confounder_cols if v in df.columns]
+    smd_before = {v: compute_smd(treated, control, v) for v in balance_vars}
+    smd_after = {v: compute_weighted_smd(df, treatment_col, v, ps) for v in balance_vars}
+    max_smd_before = finite_max(smd_before.values())
+    max_smd_after = finite_max(smd_after.values())
+    balance_rows = [
+        {
+            "drug_class": class_name,
+            "exposure_definition": exposure_definition,
+            "variable": var,
+            "smd_before": round(smd_before[var], 4) if np.isfinite(smd_before[var]) else np.nan,
+            "smd_after_ipw": round(smd_after[var], 4) if np.isfinite(smd_after[var]) else np.nan,
+        }
+        for var in balance_vars
+    ]
 
     ipw_est, ipw_se = ipw_ate(df, treatment_col, "kidney_stones", ps)
-    aipw_est, aipw_se = aipw_ate(df, treatment_col, "kidney_stones", confounder_cols, ps)
+    if estimator == "aipw":
+        aipw_est, aipw_se, outcome_importance = aipw_ate(
+            df, treatment_col, "kidney_stones", confounder_cols, ps, return_importance=True
+        )
+        feature_importance_rows = build_feature_importance_rows(
+            class_name, exposure_definition, confounder_cols, propensity_model, outcome_importance
+        )
+    else:
+        aipw_est, aipw_se = np.nan, np.nan
+        feature_importance_rows = []
 
     use_est = aipw_est if not np.isnan(aipw_est) else ipw_est
     use_se = aipw_se if not np.isnan(aipw_se) else ipw_se
@@ -159,34 +273,37 @@ def analyze_drug_class(df, class_name):
     evalue = compute_evalue(rr) if rr != 1 else np.nan
 
     cate_by_sex = {}
-    for sex_val, sex_label in [(1, "Male"), (0, "Female")]:
-        subset = df[df["sex_binary"] == sex_val]
-        if len(subset) < 100:
-            continue
-        ps_sub = compute_propensity_scores(subset, treatment_col, confounder_cols)
-        sub_est, sub_se = ipw_ate(subset, treatment_col, "kidney_stones", ps_sub)
-        cate_by_sex[sex_label] = {"cate": round(sub_est, 4), "se": round(sub_se, 4)}
-
     cate_by_age = {}
-    for label, low, high in [("20-44", 20, 44), ("45-64", 45, 64), ("65+", 65, 200)]:
-        subset = df[(df["RIDAGEYR"] >= low) & (df["RIDAGEYR"] <= high)]
-        if len(subset) < 100 or subset[treatment_col].sum() < 20:
-            continue
-        ps_sub = compute_propensity_scores(subset, treatment_col, confounder_cols)
-        sub_est, sub_se = ipw_ate(subset, treatment_col, "kidney_stones", ps_sub)
-        cate_by_age[label] = {"cate": round(sub_est, 4), "se": round(sub_se, 4)}
-
     cate_by_diabetes = {}
-    for d_val, d_label in [(1, "Diabetic"), (0, "Non-diabetic")]:
-        subset = df[df["diabetes_status"] == d_val]
-        if len(subset) < 100 or subset[treatment_col].sum() < 20:
-            continue
-        ps_sub = compute_propensity_scores(subset, treatment_col, confounder_cols)
-        sub_est, sub_se = ipw_ate(subset, treatment_col, "kidney_stones", ps_sub)
-        cate_by_diabetes[d_label] = {"cate": round(sub_est, 4), "se": round(sub_se, 4)}
+    if include_subgroups:
+        for sex_val, sex_label in [(1, "Male"), (0, "Female")]:
+            subset = df[df["sex_binary"] == sex_val]
+            if len(subset) < 100:
+                continue
+            ps_sub = compute_propensity_scores(subset, treatment_col, confounder_cols)
+            sub_est, sub_se = ipw_ate(subset, treatment_col, "kidney_stones", ps_sub)
+            cate_by_sex[sex_label] = {"cate": round(sub_est, 4), "se": round(sub_se, 4)}
+
+        for label, low, high in [("20-44", 20, 44), ("45-64", 45, 64), ("65+", 65, 200)]:
+            subset = df[(df["RIDAGEYR"] >= low) & (df["RIDAGEYR"] <= high)]
+            if len(subset) < 100 or subset[treatment_col].sum() < 20:
+                continue
+            ps_sub = compute_propensity_scores(subset, treatment_col, confounder_cols)
+            sub_est, sub_se = ipw_ate(subset, treatment_col, "kidney_stones", ps_sub)
+            cate_by_age[label] = {"cate": round(sub_est, 4), "se": round(sub_se, 4)}
+
+        for d_val, d_label in [(1, "Diabetic"), (0, "Non-diabetic")]:
+            subset = df[df["diabetes_status"] == d_val]
+            if len(subset) < 100 or subset[treatment_col].sum() < 20:
+                continue
+            ps_sub = compute_propensity_scores(subset, treatment_col, confounder_cols)
+            sub_est, sub_se = ipw_ate(subset, treatment_col, "kidney_stones", ps_sub)
+            cate_by_diabetes[d_label] = {"cate": round(sub_est, 4), "se": round(sub_se, 4)}
 
     return {
         "drug_class": class_name,
+        "exposure_definition": exposure_definition,
+        "estimator": estimator,
         "n_treated": int(n_treated),
         "n_control": int(n_control),
         "ipw_ate": round(ipw_est, 4),
@@ -200,10 +317,13 @@ def analyze_drug_class(df, class_name):
         "p_value": round(pval, 6),
         "rr": round(rr, 3),
         "e_value": round(evalue, 2) if not np.isnan(evalue) else None,
-        "max_smd_before": round(max_smd, 3),
+        "max_smd_before": round(max_smd_before, 3) if np.isfinite(max_smd_before) else None,
+        "max_smd_after_ipw": round(max_smd_after, 3) if np.isfinite(max_smd_after) else None,
         "cate_by_sex": cate_by_sex,
         "cate_by_age": cate_by_age,
         "cate_by_diabetes": cate_by_diabetes,
+        "balance_rows": balance_rows,
+        "feature_importance_rows": feature_importance_rows,
     }
 
 
@@ -245,6 +365,9 @@ def plot_forest(results):
 
 
 def main():
+    for d in [FIGURES_DIR, TABLES_DIR, MODELS_DIR]:
+        d.mkdir(parents=True, exist_ok=True)
+
     print("=== Loading processed data ===")
     df = pd.read_parquet(PROCESSED_DIR / "analysis_ready.parquet")
     print(f"  {len(df)} rows")
@@ -266,12 +389,24 @@ def main():
     results = fdr_correction(results)
 
     ate_df = pd.DataFrame([{k: v for k, v in r.items()
-                           if k not in ["cate_by_sex", "cate_by_age", "cate_by_diabetes"]}
+                           if k not in ["cate_by_sex", "cate_by_age", "cate_by_diabetes", "balance_rows", "feature_importance_rows"]}
                           for r in results])
     ate_df = ate_df.sort_values("ate", ascending=False)
     ate_df.to_csv(TABLES_DIR / "ate_summary.csv", index=False)
     print("\n=== ATE Summary ===")
-    print(ate_df[["drug_class", "n_treated", "ate", "ci_low", "ci_high", "p_value", "p_value_fdr", "significant_fdr", "e_value"]].to_string(index=False))
+    print(ate_df[["drug_class", "n_treated", "ate", "ci_low", "ci_high", "p_value", "p_value_fdr", "significant_fdr", "e_value", "max_smd_after_ipw"]].to_string(index=False))
+
+    balance_rows = [row for r in results for row in r["balance_rows"]]
+    if balance_rows:
+        balance_df = pd.DataFrame(balance_rows)
+        balance_df.to_csv(TABLES_DIR / "covariate_balance.csv", index=False)
+        print("\n=== Covariate balance saved ===")
+
+    importance_rows = [row for r in results for row in r["feature_importance_rows"]]
+    if importance_rows:
+        importance_df = pd.DataFrame(importance_rows)
+        importance_df.to_csv(TABLES_DIR / "causal_feature_importance.csv", index=False)
+        print("\n=== Causal nuisance-model feature importance saved ===")
 
     subgroup_rows = []
     for r in results:
@@ -281,6 +416,7 @@ def main():
             for subgroup_name, vals in subgroup_data.items():
                 subgroup_rows.append({
                     "drug_class": r["drug_class"],
+                    "exposure_definition": r["exposure_definition"],
                     "subgroup_type": subgroup_type,
                     "subgroup": subgroup_name,
                     "cate": vals["cate"],
@@ -290,6 +426,34 @@ def main():
         subgroup_df = pd.DataFrame(subgroup_rows)
         subgroup_df.to_csv(TABLES_DIR / "cate_subgroups.csv", index=False)
         print("\n=== Subgroup CATEs saved ===")
+
+    print("\n=== Duration sensitivity analyses ===")
+    sensitivity_results = []
+    for cls in DRUG_CLASSES_TO_ANALYZE:
+        for exposure_definition, suffix in DURATION_EXPOSURE_DEFINITIONS:
+            treatment_col = f"drug_{cls}_{suffix}"
+            result = analyze_drug_class(
+                df,
+                cls,
+                treatment_col=treatment_col,
+                exposure_definition=exposure_definition,
+                plot_overlap=False,
+                include_subgroups=False,
+                estimator="ipw",
+            )
+            if result:
+                sensitivity_results.append(result)
+
+    if sensitivity_results:
+        sensitivity_results = fdr_correction(sensitivity_results)
+        sensitivity_df = pd.DataFrame([{k: v for k, v in r.items()
+                                      if k not in ["cate_by_sex", "cate_by_age", "cate_by_diabetes", "balance_rows", "feature_importance_rows"]}
+                                     for r in sensitivity_results])
+        sensitivity_df = sensitivity_df.sort_values(["exposure_definition", "ate"], ascending=[True, False])
+        sensitivity_df.to_csv(TABLES_DIR / "ate_duration_sensitivity.csv", index=False)
+        print("  Duration sensitivity ATEs saved")
+    else:
+        print("  No duration sensitivity results met minimum user counts")
 
     plot_forest(results)
 

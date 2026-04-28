@@ -1,0 +1,9 @@
+component,definition
+time_zero,NHANES household interview / prescription medication inventory date
+primary_exposure,Any reported use of a prescription drug class in the past 30 days at time zero
+duration_sensitivity,Current drug class use with RXDDAYS >= 365 or >= 730 days
+outcome,Lifetime self-reported kidney stone history as of time zero (KIQ026)
+follow_up,No prospective follow-up is observed in NHANES; estimates are interpreted as adjusted prevalence effects/associations under a target-trial-style framework
+exposure_window_days,30
+long_term_duration_days,365
+two_year_duration_days,730

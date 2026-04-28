@@ -1,13 +1,22 @@
 # Causal Machine Learning for Identifying Drug-Associated Kidney Stone Risk Using NHANES
 
-We use NHANES 2007-2018 data to estimate causal effects of prescription drug classes on kidney stone risk using augmented inverse probability weighting (AIPW), with ensemble ML prediction (XGBoost, LightGBM, CatBoost) and SHAP interpretability.
+We use NHANES 2007-2018 data to estimate drug-class effects on kidney stone history using a target-trial-style causal framework with augmented inverse probability weighting (AIPW), E-values, covariate balance diagnostics, and duration-based exposure sensitivity analyses.
 
 ## Dataset
 
 - **Source**: [NHANES](https://wwwn.cdc.gov/nchs/nhanes/Default.aspx) (National Health and Nutrition Examination Survey), cycles 2007-2018
 - **Sample**: 34,679 adults (20+) with valid kidney stone questionnaire responses
-- **Outcome**: Self-reported kidney stone history (KIQ026) — 3,234 cases (9.3%)
+- **Outcome**: Self-reported lifetime kidney stone history as of the NHANES interview (KIQ026) — 3,234 cases (9.3%)
 - **Features**: 95 selected features (from 175 engineered) including demographics, serum chemistry, urine labs, dietary intake, comorbidities, lifestyle, 20 drug class indicators, and clinical interaction terms
+
+## Target-Trial-Style Estimand
+
+- **Time zero**: NHANES household interview / prescription medication inventory date
+- **Primary exposure window**: reported prescription medication use in the past 30 days at time zero
+- **Treatment definition**: any current use of each drug class, analyzed one class at a time
+- **Duration sensitivity**: current drug class use with `RXDDAYS >= 365` and `RXDDAYS >= 730`
+- **Outcome timing**: lifetime kidney stone history measured at time zero, not incident stones during prospective follow-up
+- **Interpretation**: adjusted prevalence effects/associations under a target-trial-style framework; NHANES cannot identify a true two-year incident outcome window
 
 ### NHANES Components Used
 
@@ -35,8 +44,8 @@ We use NHANES 2007-2018 data to estimate causal effects of prescription drug cla
 02_preprocess.py     →  Merge, clean, feature engineer, MICE imputation → analysis_ready.parquet
 03_eda.py            →  Descriptive stats, correlation matrix, plots
 04_causal_analysis.py →  AIPW causal effects, subgroup CATEs, forest plot
-05_prediction.py     →  Optuna-tuned XGBoost/LightGBM/CatBoost, stacking ensemble, SHAP
-06_results.py        →  Executive summary, final figure panel
+05_prediction.py     →  Optional supplementary prediction benchmark
+06_results.py        →  Causal executive summary, diagnostics, final figure panel
 ```
 
 ### Setup
@@ -65,45 +74,28 @@ python 06_results.py
 
 | Drug Class | N Users | ATE (Risk Difference) | 95% CI | Significant (FDR) | E-value |
 |---|---|---|---|---|---|
-| Gout drugs | 564 | +8.8% | [7.7%, 9.9%] | Yes | 3.30 |
-| Beta blockers | 4,439 | +4.6% | [3.5%, 5.7%] | Yes | 2.35 |
-| Opioids | 2,237 | +3.7% | [2.7%, 4.8%] | Yes | 2.15 |
-| Thiazides | 3,479 | +2.4% | [1.3%, 3.5%] | Yes | 1.83 |
-| PPIs | 3,265 | +2.2% | [1.3%, 3.1%] | Yes | 1.77 |
-| Potassium-sparing | 720 | +1.9% | [1.0%, 2.9%] | Yes | 1.70 |
-| Antiepileptics | 1,638 | +1.3% | [0.3%, 2.4%] | Yes | 1.54 |
-| Metformin | 2,870 | +1.1% | [0.3%, 2.0%] | Yes | 1.49 |
-| ACE inhibitors | 4,694 | +0.7% | [-0.4%, 1.8%] | No | — |
-| NSAIDs | 1,874 | -1.0% | [-2.0%, -0.1%] | Yes | 1.50 |
-| Statins | 6,695 | -1.3% | [-2.6%, 0.0%] | No | — |
-| Loop diuretics | 1,303 | -2.7% | [-3.8%, -1.7%] | Yes | 2.18 |
+| Gout drugs | 564 | +5.4% | [4.3%, 6.4%] | Yes | 2.53 |
+| Beta blockers | 4,439 | +5.2% | [4.0%, 6.4%] | Yes | 2.48 |
+| Opioids | 2,237 | +3.5% | [2.4%, 4.5%] | Yes | 2.09 |
+| Potassium-sparing | 720 | +2.4% | [1.5%, 3.2%] | Yes | 1.82 |
+| Thiazides | 3,479 | +1.2% | [0.2%, 2.3%] | Yes | 1.52 |
+| Metformin | 2,870 | +1.0% | [0.1%, 1.9%] | Yes | 1.46 |
+| PPIs | 3,265 | +0.9% | [-0.1%, 1.9%] | No | 1.42 |
+| Antiepileptics | 1,638 | -0.7% | [-1.7%, 0.4%] | No | 1.36 |
+| NSAIDs | 1,874 | -1.2% | [-2.1%, -0.3%] | Yes | 1.56 |
+| ACE inhibitors | 4,694 | -1.3% | [-2.3%, -0.2%] | Yes | 1.58 |
+| Loop diuretics | 1,303 | -1.7% | [-2.6%, -0.8%] | Yes | 1.73 |
+| Statins | 6,695 | -1.8% | [-2.9%, -0.7%] | Yes | 1.78 |
 
 ### Crude Drug Class Stone Rates
 
 ![Drug Class Stone Rates](outputs/figures/drug_class_stone_rates.png)
 
-### Predictive Model Performance
+### Supplementary Predictive Model Performance
 
-![ROC Curve](outputs/figures/roc_curve.png)
+Prediction is not the primary experiment; it is retained only as a secondary benchmark because the causal nuisance models already perform prediction inside AIPW.
 
-| Model | ROC-AUC | PR-AUC |
-|---|---|---|
-| CatBoost (Optuna-tuned) | **0.688** | **0.188** |
-| XGBoost (Optuna-tuned) | 0.686 | 0.181 |
-| Augmented Stacking | 0.687 | 0.182 |
-| LightGBM (Optuna-tuned) | 0.669 | 0.176 |
-| Logistic Regression (Tuned) | 0.678 | 0.180 |
-| ExtraTrees | 0.672 | 0.180 |
-
-Cross-validated (3x5 repeated stratified K-fold): **XGBoost ROC-AUC = 0.692 +/- 0.009**
-
-Improved from baseline ROC-AUC of 0.644 through: Optuna hyperparameter tuning (200+ trials per model), feature engineering (race encoding, lab ratios, clinical interactions, dietary intake), MICE imputation for correlated lab values, importance-based feature selection (132 → 95 features), and multi-model ensembling.
-
-### SHAP Feature Importance
-
-![SHAP Summary](outputs/figures/shap_summary.png)
-
-![SHAP Bar](outputs/figures/shap_bar.png)
+The optional `05_prediction.py` script can still generate ROC/PR and SHAP artifacts, but these are not part of the primary causal estimand. Main interpretability now comes from `outputs/tables/causal_feature_importance.csv`, which summarizes the nuisance models used inside AIPW.
 
 ### Feature Distributions by Stone Status
 
@@ -131,20 +123,21 @@ Improved from baseline ROC-AUC of 0.644 through: Optuna hyperparameter tuning (2
 
 ## Key Findings
 
-1. **Gout drugs** show the largest causal effect (+8.8%), but this is likely confounding by indication — gout patients have high uric acid, which independently causes stones
-2. **Loop diuretics** appear protective (-2.7%), consistent with their mechanism of reducing calcium reabsorption
-3. **NSAIDs** show a modest protective effect (-1.0%)
-4. **Antiepileptics** (including topiramate) show a small but significant effect (+1.3%), consistent with carbonic anhydrase inhibition
-5. **Statins** and **ACE inhibitors** show no significant causal effect after adjustment
+1. **Gout drugs** and **beta blockers** show the largest positive adjusted effects, but gout drugs remain highly vulnerable to confounding by indication.
+2. **Opioids** and **potassium-sparing diuretics** show smaller positive adjusted effects with E-values above 1.8.
+3. **NSAIDs**, **ACE inhibitors**, **loop diuretics**, and **statins** show negative adjusted effects in the current AIPW run.
+4. **PPIs** and **antiepileptics** are not FDR-significant after the updated causal framing and diagnostics.
+5. **Covariate balance diagnostics remain important** because several drug classes still have high maximum post-IPW SMDs.
 
 ## Limitations
 
 - NHANES is cross-sectional: kidney stone history (ever) vs current drug use — temporal ambiguity
+- There is no prospective two-year outcome window; duration-based drug exposure can be tested with `RXDDAYS`, but stone incidence after time zero is not observed
 - Unmeasured confounding remains possible (E-values quantify minimum confounding strength needed)
 - Self-reported outcome may undercount asymptomatic stones
 - Confounding by indication is severe for gout drugs and alpha blockers (tamsulosin prescribed FOR stones)
 - No urine chemistry (pH, oxalate, citrate) or dietary oxalate available in NHANES
-- Predictive performance (ROC-AUC ~0.69) reflects inherent ceiling of cross-sectional survey data; published EHR-based models with richer data achieve 0.70-0.78
+- Supplementary prediction performance reflects the inherent ceiling of cross-sectional survey data; published EHR-based models with richer longitudinal data achieve 0.70-0.78
 
 ## Project Structure
 
@@ -156,8 +149,8 @@ ML4H/
 ├── 02_preprocess.py           # Preprocessing pipeline
 ├── 03_eda.py                  # Exploratory data analysis
 ├── 04_causal_analysis.py      # Causal inference (AIPW)
-├── 05_prediction.py           # Ensemble ML (XGBoost/LightGBM/CatBoost) + SHAP
-├── 06_results.py              # Results compilation
+├── 05_prediction.py           # Optional supplementary prediction benchmark
+├── 06_results.py              # Causal results compilation
 ├── requirements.txt
 ├── data/
 │   ├── raw/                   # 98 NHANES XPT files
@@ -165,5 +158,5 @@ ML4H/
 └── outputs/
     ├── figures/               # All plots
     ├── tables/                # CSV summary tables
-    └── models/                # XGBoost model, SHAP values
+    └── models/                # Optional supplementary prediction artifacts
 ```

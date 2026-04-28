@@ -22,7 +22,7 @@ Traditional pharmacoepidemiological approaches to this problem — logistic regr
 
 1. **Flexible confounding adjustment**: Gradient-boosted models used as nuisance estimators in doubly robust causal frameworks can capture complex nonlinear relationships between confounders and both treatment assignment and outcomes, reducing residual confounding bias.
 2. **Heterogeneous treatment effect discovery**: Causal forests (Wager & Athey, 2018) can identify subgroups where drug-stone effects are concentrated without requiring pre-specification of interaction terms — revealing, for example, that a drug's lithogenic effect may be strongest in older patients with low eGFR and high baseline calcium.
-3. **Interpretable feature attribution**: SHAP values provide transparent, patient-level explanations of which features drive both predicted risk and estimated causal effects, bridging the gap between predictive accuracy and clinical interpretability.
+3. **Interpretable causal nuisance models**: Feature importance from the propensity and outcome models helps explain which covariates drive adjustment inside the causal estimator, rather than adding a separate prediction-only objective.
 
 ---
 
@@ -65,24 +65,24 @@ Wager and Athey (2018) developed the causal forest algorithm for estimating hete
 
 ### How are we going to solve this problem?
 
-We employ a three-stage analytical framework:
+We employ a target-trial-style causal framework with an explicit time zero. Time zero is the NHANES household interview / prescription medication inventory date. Treatment is current drug-class use reported in the past 30 days at time zero. The measured outcome is lifetime kidney stone history as of time zero, so the analysis should be interpreted as an adjusted prevalence-effect framework rather than a prospective two-year incidence study.
 
-**Stage 1 — Causal effect estimation**: For each of 12 major drug classes, we estimate the Average Treatment Effect (ATE) on kidney stone risk using Augmented Inverse Probability Weighting (AIPW). This doubly robust estimator combines a propensity score model (probability of drug class exposure given confounders) with an outcome model (probability of kidney stones given confounders), providing consistent ATE estimates if either model is correctly specified. We use gradient-boosted models as nuisance estimators within the AIPW framework, and apply Benjamini-Hochberg false discovery rate correction for multiple testing across drug classes.
+**Stage 1 — Causal effect estimation and interpretation**: For each of 12 major drug classes, we estimate the Average Treatment Effect (ATE) on kidney stone history using Augmented Inverse Probability Weighting (AIPW). This doubly robust estimator combines a propensity score model (probability of drug class exposure given confounders) with an outcome model (probability of kidney stones given confounders), providing consistent ATE estimates if either model is correctly specified. We use gradient-boosted models as nuisance estimators within the AIPW framework, apply Benjamini-Hochberg false discovery rate correction for multiple testing across drug classes, evaluate covariate balance after IPW, and report E-values alongside ATEs to quantify sensitivity to unmeasured confounding. Interpretability is attached to these causal nuisance models rather than treated as a separate prediction stage.
 
 **Stage 2 — Subgroup discovery**: For each drug class with a significant ATE, we estimate Conditional Average Treatment Effects (CATEs) across patient subgroups defined by sex, age group (20-44, 45-64, 65+), and diabetes status using stratified IPW estimation. This reveals heterogeneity in drug-stone effects.
 
-**Stage 3 — Predictive modeling with interpretability**: We train logistic regression (L1-penalized baseline) and XGBoost models to predict kidney stone risk from all available features, then apply SHAP to identify the most predictive features. Comparing SHAP-based predictive importance with causal ATE estimates reveals which drug-stone associations are driven by confounding versus genuine effects.
+**Sensitivity analyses**: We use `RXDDAYS` to repeat the exposure definition for longer-term current users (`RXDDAYS >= 365` and `RXDDAYS >= 730`). This tests whether the estimated effects are stable under stronger exposure-duration definitions, while still acknowledging that NHANES does not observe incident stones after time zero.
 
 ### How our research is novel
 
-This is the first study to: (1) apply doubly robust causal inference to estimate drug-class-level effects on kidney stone risk using nationally representative data; (2) simultaneously compare causal effects across 12 drug classes within a unified analytical framework; (3) perform subgroup-level causal effect estimation to identify which patient profiles face the highest drug-attributable stone risk; and (4) juxtapose causal estimates with SHAP-based predictive importance to explicitly distinguish confounded from causal associations.
+This is the first study to: (1) apply doubly robust causal inference to estimate drug-class-level effects on kidney stone history using nationally representative data; (2) simultaneously compare causal effects across 12 drug classes within a unified analytical framework; (3) perform subgroup-level causal effect estimation to identify which patient profiles face the highest drug-attributable stone risk; and (4) combine ATEs, E-values, covariate balance diagnostics, and duration-based exposure sensitivity within the same causal analysis.
 
 ### Dataset introduction
 
 We use the National Health and Nutrition Examination Survey (NHANES), pooling six two-year cycles from 2007-2008 through 2017-2018. NHANES is a nationally representative cross-sectional survey of the U.S. civilian non-institutionalized population, conducted by the National Center for Health Statistics (CDC). We link 13 data components per cycle:
 
-- **Outcome**: Kidney Conditions questionnaire (KIQ_U) — KIQ026: "Have you ever had kidney stones?" (binary)
-- **Drug exposure**: Prescription Medications (RXQ_RX) — generic drug names, duration, total drug count
+- **Outcome**: Kidney Conditions questionnaire (KIQ_U) — KIQ026: "Have you ever had kidney stones?" measured as lifetime history at time zero
+- **Drug exposure**: Prescription Medications (RXQ_RX) — current past-30-day prescription use, generic drug names, duration (`RXDDAYS`), total drug count
 - **Serum chemistry**: Standard Biochemistry Profile (BIOPRO) — calcium, uric acid, phosphorus, bicarbonate, BUN, creatinine, sodium, potassium, chloride (92%+ coverage)
 - **Urine labs**: Albumin & Creatinine (ALB_CR) — urine albumin, creatinine (97% coverage)
 - **Demographics**: age, sex, race/ethnicity, poverty-income ratio, education
@@ -97,12 +97,13 @@ Derived features include eGFR (CKD-EPI 2021 equation), albumin-creatinine ratio,
 
 ### Experiments setup
 
-- **Causal analysis**: 12 drug classes analyzed (minimum 100 users). Confounders include 24 variables: demographics (age, sex, race, income), body measures (BMI, waist), serum labs (9 analytes), derived measures (eGFR, ACR), comorbidities (diabetes, hypertension, high cholesterol, CHF, CHD), lifestyle (smoking, physical activity), and other drug class indicators. AIPW uses L2-penalized logistic regression for propensity scores and gradient-boosted regressors for outcome models. Propensity score overlap is verified visually for each drug class.
-- **Prediction**: 80/20 stratified train/test split. Five models trained: Logistic Regression (L1, GridSearchCV-tuned C), XGBoost (Optuna-tuned, 200 trials, 5-fold CV), LightGBM (Optuna-tuned, 150 trials), CatBoost (Optuna-tuned, 100 trials), and ExtraTrees. Feature selection via XGBoost importance threshold reduces 132 engineered features to 95. Stacking ensemble combines all models via out-of-fold predictions with logistic regression meta-learner. Evaluation via ROC-AUC, PR-AUC, F1, calibration, and repeated 3x5 stratified CV. SHAP TreeExplainer applied to XGBoost for feature attribution.
+- **Causal analysis**: 12 drug classes analyzed (minimum 100 users). Confounders include demographics (age, sex, race, income), body measures (BMI, waist), serum labs, derived measures (eGFR, ACR), comorbidities, lifestyle, and other drug class indicators. AIPW uses L2-penalized logistic regression for propensity scores and gradient-boosted regressors for outcome models. Propensity score overlap and before/after IPW standardized mean differences are evaluated for each drug class.
+- **Causal interpretability**: Feature importance is extracted from the nuisance propensity and outcome models used inside AIPW, so interpretation supports the causal estimand rather than a separate standalone prediction stage.
+- **Duration sensitivity**: Current drug class use is redefined using `RXDDAYS >= 365` and `RXDDAYS >= 730` to evaluate whether estimates are robust among longer-term current users.
 - **Feature engineering**: Race one-hot encoding, lab ratios (calcium/phosphorus, BUN/creatinine, sodium/potassium, BUN/eGFR), polynomial terms (age^2, BMI^2), clinical interactions (drug_count x age, uric_acid x BMI, etc.), dietary-derived features (sodium/potassium ratio, low water intake flag), composite scores (metabolic syndrome, high-risk drug count).
 - **Imputation**: IterativeImputer (MICE) for correlated lab values; median imputation for other variables.
 - **Dietary data**: NHANES DR1TOT (24-hour dietary recall) added for all cycles, providing water/moisture intake, dietary calcium, sodium, potassium, protein, vitamin C, magnesium, energy, fiber, and sugars.
-- **E-values**: For each significant ATE, we compute the E-value — the minimum strength of unmeasured confounding needed to explain away the observed result — to quantify robustness.
+- **E-values**: For each significant ATE, we compute the E-value — the minimum strength of unmeasured confounding needed to explain away the observed result — and evaluate it together with the ATE and confidence interval.
 
 ---
 
@@ -131,36 +132,24 @@ Stone formers are significantly older, more likely male, more obese, and have su
 
 | Drug Class | N Users | ATE (Risk Difference) | 95% CI | FDR Sig. | E-value |
 |---|---|---|---|---|---|
-| Gout drugs | 564 | +8.8% | [7.7%, 9.9%] | Yes | 3.30 |
-| Beta blockers | 4,439 | +4.6% | [3.5%, 5.7%] | Yes | 2.35 |
-| Opioids | 2,237 | +3.7% | [2.7%, 4.8%] | Yes | 2.15 |
-| Thiazides | 3,479 | +2.4% | [1.3%, 3.5%] | Yes | 1.83 |
-| PPIs | 3,265 | +2.2% | [1.3%, 3.1%] | Yes | 1.77 |
-| Potassium-sparing | 720 | +1.9% | [1.0%, 2.9%] | Yes | 1.70 |
-| Antiepileptics | 1,638 | +1.3% | [0.3%, 2.4%] | Yes | 1.54 |
-| Metformin | 2,870 | +1.1% | [0.3%, 2.0%] | Yes | 1.49 |
-| ACE inhibitors | 4,694 | +0.7% | [-0.4%, 1.8%] | No | — |
-| NSAIDs | 1,874 | -1.0% | [-2.0%, -0.1%] | Yes | 1.50 |
-| Statins | 6,695 | -1.3% | [-2.6%, 0.0%] | No | — |
-| Loop diuretics | 1,303 | -2.7% | [-3.8%, -1.7%] | Yes | 2.18 |
+| Gout drugs | 564 | +5.4% | [4.3%, 6.4%] | Yes | 2.53 |
+| Beta blockers | 4,439 | +5.2% | [4.0%, 6.4%] | Yes | 2.48 |
+| Opioids | 2,237 | +3.5% | [2.4%, 4.5%] | Yes | 2.09 |
+| Potassium-sparing | 720 | +2.4% | [1.5%, 3.2%] | Yes | 1.82 |
+| Thiazides | 3,479 | +1.2% | [0.2%, 2.3%] | Yes | 1.52 |
+| Metformin | 2,870 | +1.0% | [0.1%, 1.9%] | Yes | 1.46 |
+| PPIs | 3,265 | +0.9% | [-0.1%, 1.9%] | No | 1.42 |
+| Antiepileptics | 1,638 | -0.7% | [-1.7%, 0.4%] | No | 1.36 |
+| NSAIDs | 1,874 | -1.2% | [-2.1%, -0.3%] | Yes | 1.56 |
+| ACE inhibitors | 4,694 | -1.3% | [-2.3%, -0.2%] | Yes | 1.58 |
+| Loop diuretics | 1,303 | -1.7% | [-2.6%, -0.8%] | Yes | 1.73 |
+| Statins | 6,695 | -1.8% | [-2.9%, -0.7%] | Yes | 1.78 |
 
-Eight drug classes show significant positive effects (increased stone risk) and two show significant protective effects after FDR correction. Loop diuretics are the most protective (-2.7% absolute risk reduction), while gout drugs show the largest risk increase (+8.8%), though the latter is likely driven by confounding by indication.
+Six drug classes show significant positive adjusted effects and four show significant negative adjusted effects after FDR correction in the updated AIPW run. Gout drugs and beta blockers have the largest positive estimates, while statins and loop diuretics have the largest negative estimates. These estimates must be interpreted alongside E-values and covariate balance diagnostics, especially because several drug classes still have high maximum post-IPW standardized mean differences.
 
-**Predictive model performance**
+**Supplementary prediction benchmark**
 
-| Model | ROC-AUC | PR-AUC |
-|---|---|---|
-| CatBoost (Optuna-tuned) | **0.688** | **0.188** |
-| XGBoost (Optuna-tuned) | 0.686 | 0.181 |
-| Augmented Stacking Ensemble | 0.687 | 0.182 |
-| LightGBM (Optuna-tuned) | 0.669 | 0.176 |
-| Logistic Regression (Tuned C) | 0.678 | 0.180 |
-| ExtraTrees | 0.672 | 0.180 |
-| *Baseline (v1 XGBoost)* | *0.644* | *0.162* |
-
-ROC-AUC improved from 0.644 to **0.688** (+6.8%) through systematic optimization: Optuna hyperparameter tuning with 5-fold CV (200 XGBoost trials, 150 LightGBM, 100 CatBoost), feature engineering (+29 features including dietary intake, race encoding, lab ratios, clinical interactions), MICE imputation for correlated lab values, and importance-based feature selection (132 → 95 features). Repeated 3x5 stratified CV for XGBoost yields **0.692 +/- 0.009**, confirming stable generalization.
-
-The top SHAP features include drug count, waist circumference, urine creatinine, urine albumin, and ACR — dominated by metabolic and body composition markers rather than individual drug classes. Dietary features (sodium, water intake) contribute modest additional signal. Among drug-specific SHAP features, PPIs, opioids, and beta blockers rank highest, broadly consistent with the causal ATE estimates.
+Standalone prediction is no longer framed as a third experimental stage because the AIPW estimator already uses prediction internally through nuisance propensity and outcome models. The prediction script is retained only as a supplementary benchmark for how well the available cross-sectional NHANES features discriminate kidney stone history. Interpretability for the main experiment now comes from the causal nuisance models and the ATE/E-value/balance diagnostics.
 
 ---
 
@@ -170,19 +159,19 @@ The top SHAP features include drug count, waist circumference, urine creatinine,
 
 1. **Cross-sectional temporal ambiguity**: NHANES asks "have you *ever* had kidney stones" alongside *current* medication use. A patient currently taking tamsulosin may have been prescribed it *because* of a prior stone, not before it. This fundamental limitation means our causal estimates should be interpreted as associations adjusted for observed confounders, not definitive causal conclusions.
 
-2. **Confounding by indication**: Gout drugs (allopurinol, colchicine) show the largest ATE (+8.8%), but gout patients inherently have hyperuricemia — a direct cause of uric acid stones. The E-value of 3.30 suggests moderate-strength unmeasured confounding could explain this result. Similarly, the positive thiazide signal (+2.4%) contradicts clinical evidence that thiazides are protective (they reduce urinary calcium excretion); this likely reflects residual confounding by hypertension severity.
+2. **Confounding by indication**: Gout drugs (allopurinol, colchicine) show one of the largest positive ATEs (+5.4%), but gout patients inherently have hyperuricemia — a direct cause of uric acid stones. The E-value of 2.53 suggests moderate-strength unmeasured confounding could explain this result. Similarly, the positive thiazide signal (+1.2%) contradicts clinical evidence that thiazides are protective (they reduce urinary calcium excretion); this likely reflects residual confounding by hypertension severity.
 
-3. **Predictive performance ceiling**: After extensive optimization (Optuna tuning, ensemble methods, dietary features, MICE imputation, feature selection), the best model achieves ROC-AUC 0.688 (CV: 0.692). This exceeds prior literature on ML-based stone prediction (Paranjpe et al., 2023: 0.58-0.62; Salehi et al., 2024: 0.60) but falls short of the 0.70 threshold typical of clinically useful screening tools. The remaining gap reflects the inherent ceiling of cross-sectional survey data with self-reported outcomes — EHR-based models with richer longitudinal data achieve 0.70-0.78.
+3. **No incident outcome window**: NHANES supports a clear time zero for measuring current medication exposure, but it does not observe new kidney stones after that date. `RXDDAYS` can support duration-based exposure sensitivity analyses, but it cannot create a true two-year follow-up outcome.
 
 4. **Missing urine chemistry**: NHANES lacks urine pH, calcium, oxalate, and citrate measurements — the direct mechanistic mediators of stone formation. Dietary oxalate is also absent from the NHANES nutrient database. While we incorporated 24-hour dietary recall data (DR1TOT: water, calcium, sodium, potassium, protein, vitamin C, magnesium), these provide only indirect proxies for the urinary chemistry that drives stone formation.
 
 ### Completed improvements (v2)
 
-1. **Prediction pipeline overhaul**: Optuna-tuned XGBoost (200 trials), LightGBM (150 trials), CatBoost (100 trials), with stacking ensemble and multi-seed averaging. ROC-AUC improved from 0.644 to 0.688.
-2. **Feature engineering**: Added race one-hot encoding, 4 lab ratios, 11 clinical interaction terms, polynomial features, composite scores (metabolic syndrome, high-risk drug count), and 15 dietary-derived features.
-3. **Dietary intake data**: Integrated NHANES DR1TOT (24-hour dietary recall) providing 10 nutrient variables across all cycles.
-4. **Imputation**: Switched from median to IterativeImputer (MICE) for correlated lab values.
-5. **Feature selection**: XGBoost importance-based pruning (132 → 95 features) to reduce noise.
+1. **Target-trial-style framing**: Added an explicit time zero, exposure window, outcome timing, and duration-sensitivity definitions.
+2. **Causal diagnostics**: Added covariate balance diagnostics before and after IPW and report E-values alongside ATEs.
+3. **Duration sensitivity**: Added `RXDDAYS >= 365` and `RXDDAYS >= 730` exposure definitions for longer-term current users.
+4. **Feature engineering**: Added race one-hot encoding, lab ratios, clinical interaction terms, polynomial features, composite scores, and dietary-derived features.
+5. **Imputation**: Switched from median to IterativeImputer (MICE) for correlated lab values.
 
 ### Remaining tasks
 

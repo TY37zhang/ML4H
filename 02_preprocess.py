@@ -6,7 +6,7 @@ from sklearn.impute import IterativeImputer
 from config import *
 from drug_classes import create_drug_class_matrix
 
-def load_dataset(prefix, columns=None):
+def load_dataset(prefix, columns=None, required=True):
     frames = []
     for suffix, info in CYCLES.items():
         path = RAW_DIR / f"{prefix}_{suffix}.xpt"
@@ -21,6 +21,12 @@ def load_dataset(prefix, columns=None):
             df = df[["SEQN"] + [c for c in available if c != "SEQN"]]
         df["cycle"] = suffix
         frames.append(df)
+    if not frames:
+        if required:
+            raise FileNotFoundError(f"No files found for dataset prefix {prefix}")
+        empty_cols = columns or ["SEQN"]
+        empty_cols = list(dict.fromkeys(["SEQN"] + empty_cols + ["cycle"]))
+        return pd.DataFrame(columns=empty_cols)
     return pd.concat(frames, ignore_index=True)
 
 
@@ -39,8 +45,22 @@ def compute_egfr(row):
     return egfr
 
 
+def write_estimand_spec():
+    rows = [{"component": key, "definition": value} for key, value in ESTIMAND_SPEC.items()]
+    rows.extend([
+        {"component": "exposure_window_days", "definition": PRESCRIPTION_RECALL_DAYS},
+        {"component": "long_term_duration_days", "definition": LONG_TERM_USE_DAYS},
+        {"component": "two_year_duration_days", "definition": TWO_YEAR_USE_DAYS},
+    ])
+    pd.DataFrame(rows).to_csv(TABLES_DIR / "estimand_spec.csv", index=False)
+
+
 def main():
+    for d in [PROCESSED_DIR, FIGURES_DIR, TABLES_DIR, MODELS_DIR]:
+        d.mkdir(parents=True, exist_ok=True)
+
     print("=== Loading datasets ===")
+    write_estimand_spec()
 
     kiq_cols = ["SEQN", "KIQ026", "KID028"]
     kiq = load_dataset("KIQ_U", kiq_cols)
@@ -99,7 +119,7 @@ def main():
     print(f"  PAQ: {len(paq)} rows")
 
     diet_cols = ["SEQN"] + list(DIETARY_VARS.keys())
-    diet = load_dataset("DR1TOT", diet_cols)
+    diet = load_dataset("DR1TOT", diet_cols, required=False)
     print(f"  DR1TOT: {len(diet)} rows")
 
     rx_cols = ["SEQN", "RXDUSE", "RXDDRUG", "RXDDRGID", "RXDDAYS", "RXDCOUNT"]
@@ -147,6 +167,9 @@ def main():
     df = df[~df["KIQ026"].isin(OUTCOME_EXCLUDE)]
     df = df[df["KIQ026"].isin([OUTCOME_YES, OUTCOME_NO])]
     df["kidney_stones"] = (df["KIQ026"] == OUTCOME_YES).astype(int)
+    df["kidney_stone_history_at_time_zero"] = df["kidney_stones"]
+    df["rx_exposure_window_days"] = PRESCRIPTION_RECALL_DAYS
+    df["time_zero_cycle"] = df["cycle"].map(lambda suffix: CYCLES[suffix]["label"])
     print(f"  After outcome filter: {len(df)} rows, {df['kidney_stones'].sum()} stone cases")
 
     n_cycles = len(CYCLES)

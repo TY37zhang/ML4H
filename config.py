@@ -1,6 +1,6 @@
 from pathlib import Path
 
-PROJECT_DIR = Path("/Users/tianyinzhang/Downloads/ML4H")
+PROJECT_DIR = Path(__file__).resolve().parent
 RAW_DIR = PROJECT_DIR / "data" / "raw"
 PROCESSED_DIR = PROJECT_DIR / "data" / "processed"
 FIGURES_DIR = PROJECT_DIR / "outputs" / "figures"
@@ -9,6 +9,19 @@ MODELS_DIR = PROJECT_DIR / "outputs" / "models"
 NHANES_CACHE = Path("/Users/tianyinzhang/DEV/nhanes_cache")
 
 RANDOM_STATE = 42
+
+PRESCRIPTION_RECALL_DAYS = 30
+LONG_TERM_USE_DAYS = 365
+TWO_YEAR_USE_DAYS = 730
+INVALID_DURATION_CODES = [77777, 99999]
+
+ESTIMAND_SPEC = {
+    "time_zero": "NHANES household interview / prescription medication inventory date",
+    "primary_exposure": "Any reported use of a prescription drug class in the past 30 days at time zero",
+    "duration_sensitivity": "Current drug class use with RXDDAYS >= 365 or >= 730 days",
+    "outcome": "Lifetime self-reported kidney stone history as of time zero (KIQ026)",
+    "follow_up": "No prospective follow-up is observed in NHANES; estimates are interpreted as adjusted prevalence effects/associations under a target-trial-style framework",
+}
 
 CYCLES = {
     "E": {"year": 2007, "label": "2007-2008"},

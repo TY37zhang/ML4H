@@ -1,4 +1,5 @@
 import pandas as pd
+from config import INVALID_DURATION_CODES, LONG_TERM_USE_DAYS, TWO_YEAR_USE_DAYS
 
 DRUG_CLASS_MAP = {
     "statin": ["SIMVASTATIN", "ATORVASTATIN", "PRAVASTATIN", "ROSUVASTATIN",
@@ -44,6 +45,12 @@ def classify_drug(drug_name):
     return classes
 
 
+def clean_duration_days(duration):
+    duration = pd.to_numeric(duration, errors="coerce")
+    duration = duration.mask(duration.isin(INVALID_DURATION_CODES) | (duration < 0))
+    return duration
+
+
 def create_drug_class_matrix(rx_df):
     df = rx_df.copy()
     df["RXDDRUG"] = df["RXDDRUG"].astype(str).str.upper().str.strip()
@@ -55,27 +62,34 @@ def create_drug_class_matrix(rx_df):
     else:
         active = df
 
-    person_drugs = active.groupby("SEQN")["RXDDRUG"].apply(list).reset_index()
+    active = active.copy()
+    if "RXDDAYS" in active.columns:
+        active["rx_days_clean"] = clean_duration_days(active["RXDDAYS"])
+    else:
+        active["rx_days_clean"] = pd.NA
 
-    class_cols = {cls: [] for cls in DRUG_CLASS_MAP}
-    seqns = []
-    drug_counts = []
-
-    for _, row in person_drugs.iterrows():
-        seqns.append(row["SEQN"])
-        drugs = row["RXDDRUG"]
-        drug_counts.append(len(set(drugs)))
+    records = []
+    for seqn, person in active.groupby("SEQN"):
+        drugs = person["RXDDRUG"].tolist()
         person_classes = set()
-        for d in drugs:
-            person_classes.update(classify_drug(d))
+        class_days = {cls: [] for cls in DRUG_CLASS_MAP}
+
+        for drug_name, duration in zip(person["RXDDRUG"], person["rx_days_clean"]):
+            for cls in classify_drug(drug_name):
+                person_classes.add(cls)
+                if pd.notna(duration):
+                    class_days[cls].append(duration)
+
+        record = {"SEQN": seqn, "drug_count": len(set(drugs))}
         for cls in DRUG_CLASS_MAP:
-            class_cols[cls].append(1 if cls in person_classes else 0)
+            max_days = max(class_days[cls]) if class_days[cls] else 0
+            record[f"drug_{cls}"] = 1 if cls in person_classes else 0
+            record[f"drug_{cls}_days_max"] = max_days
+            record[f"drug_{cls}_long_term"] = int(max_days >= LONG_TERM_USE_DAYS)
+            record[f"drug_{cls}_two_year"] = int(max_days >= TWO_YEAR_USE_DAYS)
+        records.append(record)
 
-    result = pd.DataFrame({"SEQN": seqns, "drug_count": drug_counts})
-    for cls in DRUG_CLASS_MAP:
-        result[f"drug_{cls}"] = class_cols[cls]
-
-    return result
+    return pd.DataFrame(records)
 
 
 def create_individual_drug_matrix(rx_df, top_n=50):
