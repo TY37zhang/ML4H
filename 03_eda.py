@@ -145,8 +145,7 @@ def plot_correlation_matrix(df):
     print("  Correlation matrix saved")
 
 
-def plot_drug_stone_rates(drug_table):
-    bg_rate = 9.3
+def plot_drug_stone_rates(drug_table, bg_rate):
     fig, ax = plt.subplots(figsize=(10, 8))
     colors = ["#d32f2f" if r > bg_rate else "#1976d2" for r in drug_table["stone_rate_users"]]
     bars = ax.barh(drug_table["drug_class"], drug_table["stone_rate_users"], color=colors, alpha=0.8)
@@ -193,7 +192,7 @@ def plot_polypharmacy(df):
     rates["se"] = np.sqrt(rates["mean"] * (1 - rates["mean"]) / rates["count"])
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(rates["drug_count_bin"], rates["mean"] * 100, yerr=rates["se"] * 196,
+    ax.bar(rates["drug_count_bin"], rates["mean"] * 100, yerr=rates["se"] * 1.96,
            color="#5c6bc0", alpha=0.8, capsize=5)
     ax.set_xlabel("Number of Prescription Drugs")
     ax.set_ylabel("Kidney Stone Rate (%)")
@@ -219,7 +218,7 @@ def main():
 
     print("\n=== Generating plots ===")
     plot_correlation_matrix(df)
-    plot_drug_stone_rates(drug_table)
+    plot_drug_stone_rates(drug_table, df["kidney_stones"].mean() * 100)
     plot_distributions(df)
     plot_polypharmacy(df)
 

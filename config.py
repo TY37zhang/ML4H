@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -6,7 +7,7 @@ PROCESSED_DIR = PROJECT_DIR / "data" / "processed"
 FIGURES_DIR = PROJECT_DIR / "outputs" / "figures"
 TABLES_DIR = PROJECT_DIR / "outputs" / "tables"
 MODELS_DIR = PROJECT_DIR / "outputs" / "models"
-NHANES_CACHE = Path("/Users/tianyinzhang/DEV/nhanes_cache")
+NHANES_CACHE = Path(os.environ["NHANES_CACHE"]).expanduser() if os.environ.get("NHANES_CACHE") else None
 
 RANDOM_STATE = 42
 
@@ -34,8 +35,11 @@ CYCLES = {
 
 BASE_URL = "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/{year}/DataFiles/{filename}.xpt"
 
-CACHED_DATASETS = ["KIQ_U", "RXQ_RX", "BIOPRO", "DEMO", "ALB_CR"]
-DOWNLOAD_DATASETS = ["MCQ", "DIQ", "BPQ", "SMQ", "BMX", "BPX", "SLQ", "PAQ", "DR1TOT"]
+REQUIRED_DATASETS = [
+    "KIQ_U", "RXQ_RX", "BIOPRO", "DEMO", "ALB_CR",
+    "MCQ", "DIQ", "BPQ", "SMQ", "BMX", "BPX", "SLQ", "PAQ",
+]
+OPTIONAL_DATASETS = ["DR1TOT"]
 
 OUTCOME_VAR = "KIQ026"
 OUTCOME_YES = 1.0
@@ -74,11 +78,6 @@ BODY_VARS = {
     "BMXWAIST": "waist_circumference",
 }
 
-BP_EXAM_VARS = {
-    "BPXSY1": "systolic_bp",
-    "BPXDI1": "diastolic_bp",
-}
-
 COMORBIDITY_VARS = {
     "MCQ160B": "chf",
     "MCQ160C": "chd",
@@ -112,5 +111,3 @@ DIETARY_VARS = {
 }
 
 DRUG_MIN_USERS = 100
-TOP_INDIVIDUAL_DRUGS = 50
-CONFOUNDING_EXCLUSION_DRUGS = ["TAMSULOSIN"]

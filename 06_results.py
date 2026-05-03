@@ -3,10 +3,17 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns
 from config import *
 
 plt.style.use("seaborn-v0_8-whitegrid")
+
+
+def background_stone_rate():
+    processed_path = PROCESSED_DIR / "analysis_ready.parquet"
+    if not processed_path.exists():
+        return None
+    df = pd.read_parquet(processed_path, columns=["kidney_stones"])
+    return df["kidney_stones"].mean() * 100
 
 
 def executive_summary():
@@ -70,14 +77,16 @@ def causal_diagnostics_summary():
 
 def main_figure_panel():
     fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    bg_rate = background_stone_rate()
 
     drug_prev_path = TABLES_DIR / "drug_class_prevalence.csv"
     if drug_prev_path.exists():
         ax = axes[0, 0]
         dp = pd.read_csv(drug_prev_path).sort_values("stone_rate_users")
-        colors = ["#d32f2f" if r > 9.3 else "#1976d2" for r in dp["stone_rate_users"]]
+        colors = ["#d32f2f" if bg_rate is not None and r > bg_rate else "#1976d2" for r in dp["stone_rate_users"]]
         ax.barh(dp["drug_class"], dp["stone_rate_users"], color=colors, alpha=0.8)
-        ax.axvline(x=9.3, color="black", linestyle="--", linewidth=1.5)
+        if bg_rate is not None:
+            ax.axvline(x=bg_rate, color="black", linestyle="--", linewidth=1.5)
         ax.set_xlabel("Stone Rate (%)")
         ax.set_title("(A) Crude Stone Rates by Drug Class")
 

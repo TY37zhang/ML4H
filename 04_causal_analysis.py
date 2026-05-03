@@ -3,8 +3,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import norm
@@ -18,11 +17,6 @@ CONFOUNDER_COLS = [
     "LBXSCR", "egfr", "acr", "systolic_bp", "diastolic_bp",
     "smoking_status", "diabetes_status", "physically_active",
     "MCQ160B", "MCQ160C", "BPQ020", "BPQ080", "drug_count",
-]
-
-EFFECT_MODIFIER_COLS = [
-    "RIDAGEYR", "sex_binary", "BMXBMI", "egfr", "LBXSCA",
-    "LBXSUA", "diabetes_status", "drug_count",
 ]
 
 DRUG_CLASSES_TO_ANALYZE = [

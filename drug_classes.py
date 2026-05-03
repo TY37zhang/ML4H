@@ -90,21 +90,3 @@ def create_drug_class_matrix(rx_df):
         records.append(record)
 
     return pd.DataFrame(records)
-
-
-def create_individual_drug_matrix(rx_df, top_n=50):
-    df = rx_df.copy()
-    df["RXDDRUG"] = df["RXDDRUG"].astype(str).str.upper().str.strip()
-    df = df[(df["RXDDRUG"] != "NAN") & (df["RXDDRUG"] != "")]
-
-    drug_counts = df.groupby("RXDDRUG")["SEQN"].nunique().sort_values(ascending=False)
-    top_drugs = drug_counts.head(top_n).index.tolist()
-
-    person_drugs = df.drop_duplicates(subset=["SEQN", "RXDDRUG"])
-    person_drugs = person_drugs[person_drugs["RXDDRUG"].isin(top_drugs)]
-
-    pivot = person_drugs.pivot_table(index="SEQN", columns="RXDDRUG", aggfunc="size", fill_value=0)
-    pivot = (pivot > 0).astype(int)
-    pivot.columns = [f"ind_drug_{c.lower().replace(' ', '_').replace(';', '_')}" for c in pivot.columns]
-
-    return pivot.reset_index()
